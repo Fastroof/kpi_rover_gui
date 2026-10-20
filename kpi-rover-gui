@@ -1,0 +1,3 @@
+#!/bin/sh
+# Start the KPI Rover GUI from this folder.
+cd "$(dirname "$(readlink -f "$0")")" && exec python3 -m kpi_rover_gui "$@"
