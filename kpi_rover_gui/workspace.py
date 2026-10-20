@@ -4,7 +4,7 @@ commands to build it and to run the simulation.
 
 The GUI never imports kpi_rover code: it runs the same commands a user would
 type in a terminal. World descriptions come from 'world_info.py --json' of
-the kpi_rover package (see kpi_rover/worlds/world_info.py).
+the kpi_rover package (see kpi_rover/worlds/lib/world_info.py).
 """
 
 import filecmp
@@ -20,7 +20,7 @@ PACKAGE = 'kpi_rover'
 
 # Files of the worlds folder whose difference between the sources and the
 # installed package means the installed worlds are outdated.
-WORLD_FILE_PATTERNS = ('*.world.yaml', '*.sdf.xacro', '*.sdf', '*.world', '*.py')
+WORLD_FILE_PATTERNS = ('*.world.yaml', '*.sdf.xacro', '*.sdf', '*.world', 'lib/*.py', 'tools/*.py', '*/generator.py')
 
 
 class WorkspaceError(Exception):
@@ -86,9 +86,9 @@ class Workspace:
         of the installed package, which the launch files use, or of the sources
         if the workspace is not built yet.
         """
-        from_install = os.path.isfile(os.path.join(self.installed_worlds, 'world_info.py'))
+        from_install = os.path.isfile(os.path.join(self.installed_worlds, 'lib', 'world_info.py'))
         folder = self.installed_worlds if from_install else self.src_worlds
-        script = os.path.join(folder, 'world_info.py')
+        script = os.path.join(folder, 'lib', 'world_info.py')
         if not os.path.isfile(script):
             raise WorkspaceError(f'{script} not found')
         result = subprocess.run(['python3', script, '--json'], capture_output=True, text=True, timeout=60)
@@ -103,7 +103,7 @@ class Workspace:
 
     def tool(self, name):
         """Path of a tool script of the installed worlds folder (render_previews.py, spawn_object.py)."""
-        return os.path.join(self.installed_worlds, name)
+        return os.path.join(self.installed_worlds, 'tools', name)
 
     def map_command(self, world, sdf, out, partition):
         """The command making the map of a generated world file (render_previews.py --sdf)."""
@@ -132,7 +132,7 @@ class Workspace:
             return True
         for pattern in WORLD_FILE_PATTERNS:
             for src in glob.glob(os.path.join(self.src_worlds, pattern)):
-                installed = os.path.join(self.installed_worlds, os.path.basename(src))
+                installed = os.path.join(self.installed_worlds, os.path.relpath(src, self.src_worlds))
                 if not os.path.isfile(installed) or not filecmp.cmp(src, installed, shallow=False):
                     return True
         return False
@@ -182,9 +182,9 @@ def sim_command(world, world_args=None, start=None, pose=None, ui=True, robot=Tr
 
 
 def robot_command(x, y, z, yaw):
-    """The command putting the robot with its navigation into the running world (launch_sim_robot.launch.py)."""
-    return shlex.join(['ros2', 'launch', PACKAGE, 'launch_sim_robot.launch.py', f'x_pose:={x:.3f}', f'y_pose:={y:.3f}',
-                       f'z_pose:={z:.3f}', f'yaw_pose:={yaw:.4f}'])
+    """The command putting the robot with its navigation into the running world (launch_sim.launch.py gazebo:=false)."""
+    return shlex.join(['ros2', 'launch', PACKAGE, 'launch_sim.launch.py', 'gazebo:=false', 'ui:=false',
+                       f'x_pose:={x:.3f}', f'y_pose:={y:.3f}', f'z_pose:={z:.3f}', f'yaw_pose:={yaw:.4f}'])
 
 
 # Model name of the robot in Gazebo (spawn_robot.launch.py).

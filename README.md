@@ -13,7 +13,7 @@ from the log panel.
 - ROS 2 Jazzy and the [kpi_rover](https://github.com/KPI-Rover/ros_sw) workspace
   on this machine (not in Docker), in a version that has the world manifests
   (`worlds/<world>.world.yaml`) and their tools (`world_info.py`,
-  `render_previews.py`, `spawn_object.py`, `launch_sim_robot.launch.py`).
+  `render_previews.py`, `spawn_object.py`, the `gazebo` argument of `launch_sim.launch.py`).
 - Python 3 with PyQt5 and PyYAML. Both come with ROS (`python3-pyqt5`,
   `python3-yaml`).
 
@@ -58,7 +58,7 @@ follows the system setting, and the GUI follows it live when you switch it.
      robot would be put into something, its square turns red and it can't be
      put in. Otherwise it is put on the surface there. Then *Put the robot here* starts the
      robot with its controllers, localization, mapping and navigation
-     (`launch_sim_robot.launch.py`). *Take out* removes it, so you can put it
+     (`launch_sim.launch.py gazebo:=false`). *Take out* removes it, so you can put it
      somewhere else.
    - **Objects**: choose a box, a crate, a cone, a low object or the flat
      board and click the map to put it into the running world (in the garden
@@ -88,8 +88,8 @@ Everything about the worlds comes from the kpi_rover world manifests
 - the world presets;
 - the start points;
 - the pictures in `worlds/<world>/previews/`, rendered with
-  `worlds/render_previews.py <world>`. With `--sdf` the same tool makes the
-  map of a generated world, and `worlds/spawn_object.py` puts objects into
+  `worlds/tools/render_previews.py <world>`. With `--sdf` the same tool makes the
+  map of a generated world, and `worlds/tools/spawn_object.py` puts objects into
   the running world.
 
 A new world or option shows up in the GUI without changing the GUI.
