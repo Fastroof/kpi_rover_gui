@@ -197,9 +197,15 @@ def remove_model_command(world, name):
                        '--reptype', 'gz.msgs.Boolean', '--timeout', '5000', '--req', f'name: "{name}" type: MODEL'])
 
 
-def sim_ui_command():
-    """The command starting the Gazebo GUI and RViz for a running simulation."""
-    return shlex.join(['ros2', 'launch', PACKAGE, 'launch_sim_ui.launch.py'])
+def gazebo_window_command():
+    """The command starting the Gazebo GUI for a running simulation (as launch_sim_ui.launch.py does)."""
+    return shlex.join(['ros2', 'launch', 'ros_gz_sim', 'gz_sim.launch.py', 'gz_args:=-g -v4'])
+
+
+def rviz_command(ws):
+    """The command starting RViz with the kpi_rover config and simulated time (as launch_sim_ui.launch.py does)."""
+    config = os.path.join(ws.path, 'install', PACKAGE, 'share', PACKAGE, 'config', 'view_bot.rviz')
+    return shlex.join(['ros2', 'run', 'rviz2', 'rviz2', '-d', config, '--ros-args', '-p', 'use_sim_time:=true'])
 
 
 def joystick_command():
@@ -221,14 +227,46 @@ def terminal():
     return None
 
 
-def keyboard_command(ws):
+def keyboard_command(ws, arena=False):
     """Drive the robot with the keyboard: teleop_twist_keyboard in a terminal window; None without a terminal."""
     prefix = terminal()
     if not prefix:
         return None
+    teleop = shlex.join(KEYBOARD_TELEOP)
     inner = (f'source {shlex.quote(ws.ros_setup)} && source {shlex.quote(ws.install_setup)} && '
-             f'{shlex.join(KEYBOARD_TELEOP)}')
+             f'{in_arena(teleop) if arena else teleop}')
     return shlex.join(prefix + ['bash', '-c', inner])
+
+
+# --- the shared arena of the KPI Rover hub: a Gazebo server that robots from the sessions join (kpi-arena) ---
+
+ARENA = 'kpi-arena'
+# Line of 'kpi-arena watch' with the folder of the downloaded map (map.json, map.jpg)
+ARENA_MAP = 'Arena map: '
+
+
+def arena_available():
+    """True on the hub (the kpi-arena command is there)."""
+    return shutil.which(ARENA) is not None
+
+
+def in_arena(command):
+    """The command run on the arena network instead of this machine's own."""
+    return f'{ARENA} exec {command}'
+
+
+def arena_watch_command():
+    return shlex.join([ARENA, 'watch'])
+
+
+def arena_gazebo_command():
+    """The Gazebo window of the arena (kpi-arena downloads the meshes of its world first)."""
+    return shlex.join([ARENA, 'gazebo'])
+
+
+def arena_robot_command(x, y, z, yaw):
+    """The robot with its navigation put into the arena world (kpi-arena takes it out when stopped)."""
+    return shlex.join([ARENA, f'x_pose:={x:.3f}', f'y_pose:={y:.3f}', f'z_pose:={z:.3f}', f'yaw_pose:={yaw:.4f}'])
 
 
 def running_gazebo():

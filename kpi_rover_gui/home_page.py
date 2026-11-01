@@ -1,4 +1,4 @@
-"""The first page: all worlds as cards with their pictures."""
+"""The first page: all worlds as cards with their pictures; on the hub the shared arena first."""
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QGridLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
@@ -18,8 +18,10 @@ class WorldCard(Clickable):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 12)
         layout.setSpacing(10)
-        image = ImageView(cover=True, radius=13, ratio=0.6)
+        image = ImageView(cover=True, radius=13, ratio=0.6, round_bottom=False)
         image.set_image(info.get('image'), info['title'])
+        image.ribbon = info.get('ribbon', '')
+        image.ribbon_color = info.get('ribbon_color', 'accent')
         layout.addWidget(image)
         title = QLabel(info['title'])
         font = title.font()
@@ -32,6 +34,7 @@ class WorldCard(Clickable):
 
 class HomePage(QWidget):
     chosen = pyqtSignal(str)
+    arena_chosen = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -60,13 +63,29 @@ class HomePage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
         self.columns = 0
+        self.worlds = []
+        self.arena = None
 
     def set_worlds(self, worlds, message=''):
         self.message.setText(message)
         self.message.setVisible(bool(message))
+        self.worlds = worlds
+        self._make_cards()
+
+    def set_arena(self, state):
+        """The shared arena card first among the worlds ({title, image, ribbon, ribbon_color}),
+        or None: no card (not on the hub)."""
+        self.arena = state
+        self._make_cards()
+
+    def _make_cards(self):
         clear_layout(self.grid)
         self.cards = []
-        for info in worlds:
+        if self.arena:
+            card = WorldCard(dict(self.arena, name=''))
+            card.clicked.connect(self.arena_chosen)
+            self.cards.append(card)
+        for info in self.worlds:
             card = WorldCard(info)
             card.clicked.connect(lambda c=card: self.chosen.emit(c.name))
             self.cards.append(card)

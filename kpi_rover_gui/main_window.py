@@ -4,6 +4,11 @@ the run page. There everything is started by hand: the build, the
 simulation world, then the robot at a place chosen on the map of the
 generated world, objects put on the map, the Gazebo window and RViz, robot
 control. Nothing starts by itself.
+
+On the hub there is also the shared arena (kpi-arena): a world on the server
+that robots from all sessions join. Joining it takes the place of starting the
+simulation; the robot, RViz, the Gazebo window and robot control then talk to
+the arena instead of a simulation of this session.
 """
 
 import hashlib
@@ -116,6 +121,9 @@ class MainWindow(QMainWindow):
         self.library = []
         self.map_dir = None
         self.restart_after_stop = False
+        self.arena = None               # {world, world_args, ...} of the shared arena while the run page is for it
+        self.arena_check = None         # the running 'kpi-arena info'
+        self.arena_enter = False        # open the arena when the check is done
 
         self._build_ui()
         theme.current().changed.connect(self._update)
@@ -156,6 +164,7 @@ class MainWindow(QMainWindow):
 
         self.home = HomePage()
         self.home.chosen.connect(self.open_world)
+        self.home.arena_chosen.connect(lambda: self.check_arena(enter=True))
         self.page = WorldPage()
         self.page.changed.connect(self._update)
         self.page.save_preset.connect(self.save_preset)
@@ -197,7 +206,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence('Ctrl+R'), self, self.reload)
 
     def _add_processes(self):
-        shell = lambda command: self.ws.shell(command)      # noqa: E731
+        # In the arena the commands talk to it; the build and the map always run here.
+        shell = lambda command: self.ws.shell(ws_module.in_arena(command) if self.arena else command)  # noqa: E731
 
         self.build_card = ProcessCard('Build', 'colcon build of the workspace.', self._build_command,
                                       lambda command: self.ws.shell(command, with_install=False), 'Build', 'Stop')
@@ -210,8 +220,8 @@ class MainWindow(QMainWindow):
         self.sim = ProcessCard('Simulation', 'Gazebo with the world. The robot is added next, at the place you '
                                'choose on the map of this world.', self._sim_command, shell, 'Start', 'Stop')
         self.sim.status_hook = self._sim_status
-        self.sim.idle_hook = lambda: ('Ready to start', 'accent') if self.sim_command else \
-            ('Choose a world and its settings first', 'muted')
+        self.sim.idle_hook = lambda: ('Ready to join the arena' if self.arena else 'Ready to start', 'accent') \
+            if self.sim_command else ('Choose a world and its settings first', 'muted')
         self.sim.runner.line.connect(self._sim_line)
         self.sim.runner.finished.connect(self._sim_finished)
         self.sim.button.clicked.disconnect()
@@ -241,14 +251,24 @@ class MainWindow(QMainWindow):
         self.objects.idle_hook = self._objects_status
         self.run.add(self.objects, detail=self.objects_panel)
 
-        self.ui = ProcessCard('Gazebo window + RViz', 'See the simulation and the robot sensors.',
-                              ws_module.sim_ui_command, shell, 'Open', 'Close')
-        self.ui_with_sim = option_check('Open with the simulation', self.settings.value('sim_ui', True, type=bool))
-        self.ui_with_sim.toggled.connect(lambda on: self.settings.setValue('sim_ui', on))
-        self.run.add(self.ui, self.ui_with_sim)
+        # RViz and the Gazebo window are separate: the Gazebo window costs much CPU on a shared server.
+        self.rviz = ProcessCard('RViz', 'See the robot sensors, the map and the navigation.',
+                                lambda: ws_module.rviz_command(self.ws), shell, 'Open', 'Close')
+        self.rviz_with_sim = option_check('Open with the simulation', self.settings.value('sim_rviz', False, type=bool))
+        self.rviz_with_sim.toggled.connect(lambda on: self.settings.setValue('sim_rviz', on))
+        self.run.add(self.rviz, self.rviz_with_sim)
+
+        self.gazebo_window = ProcessCard('Gazebo window', 'See the simulated world in 3D (heavy on CPU).',
+                                         lambda: ws_module.arena_gazebo_command() if self.arena else
+                                         ws_module.gazebo_window_command(), shell, 'Open', 'Close')
+        self.gazebo_with_sim = option_check('Open with the simulation',
+                                            self.settings.value('sim_gazebo_window', False, type=bool))
+        self.gazebo_with_sim.toggled.connect(lambda on: self.settings.setValue('sim_gazebo_window', on))
+        self.run.add(self.gazebo_window, self.gazebo_with_sim)
+        self.ui_cards = ((self.rviz, self.rviz_with_sim), (self.gazebo_window, self.gazebo_with_sim))
 
         self.keyboard = ProcessCard('Keyboard control', 'Drive the robot with the keys, in a terminal window '
-                                    '(close the window to stop).', lambda: ws_module.keyboard_command(self.ws),
+                                    '(close the window to stop).', lambda: ws_module.keyboard_command(self.ws, bool(self.arena)),
                                     shell, 'Open', 'Close')
         self.keyboard.button.setEnabled(ws_module.terminal() is not None)
         self.run.add(self.keyboard)
@@ -285,6 +305,8 @@ class MainWindow(QMainWindow):
         if message:
             message += '\nCheck the paths in Preferences.'
         self.home.set_worlds(list(self.worlds.values()), message)
+        if ws_module.arena_available() and not problems:
+            self.check_arena()
         current = self.package.currentData() or self.settings.value('package', ws_module.PACKAGE)
         self.package.blockSignals(True)
         self.package.clear()
@@ -304,7 +326,9 @@ class MainWindow(QMainWindow):
         self._update()
 
     def back(self):
-        if self.stack.currentWidget() is self.run:
+        if self.stack.currentWidget() is self.run and self.arena:
+            self.show_home()
+        elif self.stack.currentWidget() is self.run:
             self.open_world(self.sim_world or self.world)
         elif self.stack.currentWidget() is self.page:
             self.show_home()
@@ -395,9 +419,72 @@ class MainWindow(QMainWindow):
 
     def _take_settings(self, command):
         self._remember()
+        self._set_arena(None)
         self.sim_world = self.world
         self.sim_command = command
         self.run.set_world(self.worlds[self.world]['title'], self.page.summary())
+        self.run.select(self.sim)
+
+    # --- the shared arena ---
+
+    def check_arena(self, enter=False):
+        """Ask the arena for its world (kpi-arena info) for its card; with 'enter' then open its run page."""
+        self.arena_enter = self.arena_enter or enter
+        if self.arena_check is not None:
+            return
+        process = QProcess(self)
+        process.finished.connect(lambda *_: self._arena_checked(process))
+        self.arena_check = process
+        process.start(ws_module.ARENA, ['info'])
+
+    def _arena_checked(self, process):
+        self.arena_check = None
+        output = bytes(process.readAllStandardOutput()).decode('utf-8', 'replace').strip()
+        try:
+            info = json.loads(output.splitlines()[-1]) if process.exitCode() == 0 and output else None
+        except ValueError:
+            info = None
+        enter, self.arena_enter = self.arena_enter, False
+        if not info or 'world' not in info:
+            # Not running: clicking the card looks again
+            self.home.set_arena(dict(title='Shared arena', ribbon='OFFLINE', ribbon_color='danger'))
+            return
+        world = self.worlds.get(info['world'], {})
+        self.home.set_arena(dict(title=f"Shared arena ({world.get('title', info['world'])})", image=world.get('image'),
+                                 ribbon='JOIN'))
+        if enter:
+            self.enter_arena(info)
+
+    def enter_arena(self, info):
+        if self.sim.running() and self.arena != info:
+            box = QMessageBox(QMessageBox.Question, 'Shared arena', 'Your simulation is running. '
+                              'Stop it to join the arena?', parent=self)
+            stop = box.addButton('Stop it and join', QMessageBox.AcceptRole)
+            box.addButton(QMessageBox.Cancel)
+            box.setDefaultButton(stop)
+            box.exec_()
+            if box.clickedButton() != stop:
+                return
+            self.stop_sim()
+            self._set_arena(info)
+            self.restart_after_stop = True
+        elif not self.sim.running():
+            self._set_arena(info)
+        self.show_run()
+
+    def _set_arena(self, info):
+        """Make the run page the one of the arena ({world, world_args, ...}), or of this session's own simulation."""
+        self.arena = info
+        self.sim.start_text, self.sim.stop_text = ('Join', 'Leave') if info else ('Start', 'Stop')
+        if not info:
+            return
+        self.sim_world = info['world']
+        self.sim_command = ws_module.arena_watch_command()
+        title = self.worlds.get(self.sim_world, {}).get('title', self.sim_world)
+        details = ', '.join(f'{k} {info[k]}' for k in ('world_args', 'floor', 'marking') if info.get(k))
+        self.run.set_world(f'Shared arena · {title}', 'One world on the server for everybody: join it, then put '
+                           'your robot in at a free place. Your robot’s navigation runs in your session.'
+                           + (f' World settings: {details}.' if details else ''))
         self.run.select(self.sim)
 
     # --- simulation ---
@@ -434,7 +521,7 @@ class MainWindow(QMainWindow):
                 return
             if anyway is None or box.clickedButton() != anyway:
                 return
-        stray = ws_module.running_gazebo()
+        stray = [] if self.arena else ws_module.running_gazebo()
         if stray:
             answer = QMessageBox.question(
                 self, 'Start', f'Another Gazebo is running ({len(stray)} processes); two simulations would '
@@ -446,20 +533,25 @@ class MainWindow(QMainWindow):
         self.world_file = self.world_name = self.world_map = None
         self.placed = []
         self._show_placed()
-        self._set_maps(None, 'Making the map of this world…')
+        self._set_maps(None, 'Getting the map of the arena…' if self.arena else 'Making the map of this world…')
         self.run.select(self.sim)
-        if self.sim.start() and self.ui_with_sim.isChecked():
-            self.ui.start()
+        if self.sim.start():
+            for card, with_sim in self.ui_cards:
+                if with_sim.isChecked():
+                    card.start()
         self._update()
 
     def stop_sim(self):
-        for card in (self.robot, self.joystick, self.ui, self.sim):
+        for card in (self.robot, self.joystick, self.rviz, self.gazebo_window, self.sim):
             card.stop()
         self.map_runner.stop()
         self._update()
 
     def _sim_status(self):
-        title = self.worlds.get(self.sim_world, {}).get('title', '')
+        title = self.worlds.get(self.sim_world, {}).get('title', self.sim_world or '')
+        if self.arena:
+            return ((f'In the arena · {title} · {self.sim.clock()}', 'success') if self.world_name else
+                    (f'Getting the map of the arena… {self.sim.clock()}', 'warning'))
         if self.world_name:
             return f'{title} running · {self.sim.clock()}', 'success'
         return f'{title} starting… {self.sim.clock()}', 'warning'
@@ -473,9 +565,15 @@ class MainWindow(QMainWindow):
         if match and not self.world_name:
             self.world_name = match.group(1)
             self._update()
+        if text.startswith(ws_module.ARENA_MAP) and self.arena:
+            # The map made by the arena; its Gazebo world is named as the arena world
+            self.map_dir = text[len(ws_module.ARENA_MAP):].strip()
+            self.world_name = self.arena['world']
+            self._load_map()
+            self._update()
 
     def _sim_finished(self, code):
-        for card in (self.robot, self.joystick, self.ui):
+        for card in (self.robot, self.joystick, self.rviz, self.gazebo_window):
             card.stop()
         self.map_runner.stop()
         self.world_file = self.world_name = None
@@ -550,7 +648,10 @@ class MainWindow(QMainWindow):
     def _robot_command(self):
         x, y, yaw, _ = self.robot_panel.pose()
         ok, z, _ = self.robot_panel.check()
-        return ws_module.robot_command(x, y, z + ROBOT_LIFT, yaw) if ok else None
+        if not ok:
+            return None
+        command = ws_module.arena_robot_command if self.arena else ws_module.robot_command
+        return command(x, y, z + ROBOT_LIFT, yaw)
 
     def _robot_button(self):
         if self.robot.running():
@@ -564,7 +665,7 @@ class MainWindow(QMainWindow):
 
     def _robot_idle(self):
         if not self.sim.running():
-            return 'Start the simulation first', 'muted'
+            return ('Join the arena first' if self.arena else 'Start the simulation first'), 'muted'
         if not self.world_name:
             return 'Waiting for the world…', 'warning'
         return 'Choose the place on the map, then put the robot in', 'accent'
@@ -586,7 +687,8 @@ class MainWindow(QMainWindow):
 
     def _robot_finished(self, code):
         # Take the robot model out of the world, so it can be put in again.
-        if self.world_name and self.sim.running():
+        # In the arena kpi-arena does it, and only for the robot it put in.
+        if self.world_name and self.sim.running() and not self.arena:
             self._oneshot(ws_module.remove_model_command(self.world_name, ws_module.ROBOT_MODEL), self.robot.log)
         self.robot_ready = False
         self._update()
@@ -594,13 +696,15 @@ class MainWindow(QMainWindow):
     # --- objects ---
 
     def _objects_status(self):
+        if self.arena:
+            return 'Not in the shared arena', 'muted'
         if not self.world_name:
             return 'Start the simulation first', 'muted'
         return (f'{len(self.placed)} placed — click the map to add more', 'success') if self.placed else \
             ('Click the map to put an object', 'accent')
 
     def _place_object(self, kind, x, y, yaw):
-        if not self.world_name:
+        if not self.world_name or self.arena:
             return
         number = 1 + max([int(p[0].rsplit('_', 1)[1]) for p in self.placed] or [0])
         name = f'placed_{number}'
@@ -622,7 +726,7 @@ class MainWindow(QMainWindow):
         self.robot_panel.check()
 
     def _remove_objects(self, objects):
-        if not self.world_name:
+        if not self.world_name or self.arena:
             return
         for name, *_ in objects:
             self._oneshot(ws_module.remove_model_command(self.world_name, name), self.objects.log)

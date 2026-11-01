@@ -3,7 +3,7 @@
 import re
 
 from PyQt5.QtCore import QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFontDatabase, QPainter, QPainterPath, QPixmap, QTextCharFormat
+from PyQt5.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPixmap, QTextCharFormat
 from PyQt5.QtWidgets import QFrame, QLayout, QPlainTextEdit, QSizePolicy, QWidget
 
 from . import theme
@@ -38,15 +38,21 @@ def pixmap(source):
 
 
 class ImageView(QWidget):
-    """An image with rounded corners: 'cover' fills the widget (cropping), otherwise the whole image is shown."""
+    """
+    An image with rounded corners (the bottom ones square without 'round_bottom'): 'cover' fills the widget
+    (cropping), otherwise the whole image is shown.
+    """
 
-    def __init__(self, cover=False, radius=12, ratio=None, parent=None):
+    def __init__(self, cover=False, radius=12, ratio=None, round_bottom=True, parent=None):
         super().__init__(parent)
         self.cover = cover
         self.radius = radius
+        self.round_bottom = round_bottom
         self.ratio = ratio          # height / width for heightForWidth
         self.image = None
         self.placeholder = ''
+        self.ribbon = ''            # text of a slanted ribbon across the top right corner
+        self.ribbon_color = 'accent'    # its theme color
         if ratio:
             policy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             policy.setHeightForWidth(True)
@@ -73,7 +79,10 @@ class ImageView(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         rect = QRectF(self.rect())
         clip = QPainterPath()
+        clip.setFillRule(Qt.WindingFill)
         clip.addRoundedRect(rect, self.radius, self.radius)
+        if not self.round_bottom:
+            clip.addRect(rect.adjusted(0, rect.height() / 2, 0, 0))
         p.setClipPath(clip)
         p.fillRect(self.rect(), QColor(t['image_bg']))
         if self.image:
@@ -85,6 +94,23 @@ class ImageView(QWidget):
         elif self.placeholder:
             p.setPen(QColor(t['muted']))
             p.drawText(self.rect().adjusted(12, 12, -12, -12), Qt.AlignCenter | Qt.TextWordWrap, self.placeholder)
+        if self.ribbon:
+            self._paint_ribbon(p, t)
+
+    def _paint_ribbon(self, p, t):
+        thick = max(28.0, self.height() * 0.17)
+        offset = thick * 1.5          # from the corner to the middle of the ribbon, along both edges
+        p.translate(self.width() - offset, offset)
+        p.rotate(45)
+        band = QRectF(-offset * 2, -thick / 2, offset * 4, thick)
+        p.fillRect(band, QColor(t[self.ribbon_color]))
+        font = p.font()
+        font.setBold(True)
+        font.setPixelSize(round(thick * 0.55))
+        font.setLetterSpacing(QFont.AbsoluteSpacing, thick * 0.08)
+        p.setFont(font)
+        p.setPen(QColor(t['accent_text']))
+        p.drawText(band, Qt.AlignCenter, self.ribbon)
 
 
 class Clickable(QFrame):

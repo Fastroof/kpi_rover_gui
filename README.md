@@ -31,7 +31,8 @@ follows the system setting, and the GUI follows it live when you switch it.
 
 ## How it works
 
-1. **Choose a world.** All worlds are shown as cards with their pictures.
+1. **Choose a world.** All worlds are shown as cards with their pictures
+   (on the hub the shared arena first, see below).
 2. **Set it up.**
    - **Presets** (chips) come with the world, and choosing one shows a picture
      of the world with it. You can also save your own; to delete one, right
@@ -65,8 +66,10 @@ follows the system setting, and the GUI follows it live when you switch it.
      they are scaled down with the world). You can remove the last one or all of them.
      Objects can also be scattered at random by the world settings
      (garden, maze, overpass).
-   - **Gazebo window + RViz**: opened with the simulation, or by hand. You can
-     close it while the simulation keeps running.
+   - **RViz** and **Gazebo window**: opened by hand, or with the simulation if
+     you tick its *Open with the simulation* box (off by default). You can close
+     them while the simulation keeps running. The Gazebo window costs much CPU;
+     on a shared server keep it closed unless you need it.
    - **Keyboard control** opens teleop_twist_keyboard in a terminal window.
      **Gamepad control** runs joystick.launch.py.
 
@@ -77,6 +80,25 @@ follows the system setting, and the GUI follows it live when you switch it.
    running, and a pill in the header leads back to the run page.
 
 Settings and your presets are stored in `~/.config/kpi_rover_gui/`.
+
+## Shared arena (KPI Rover hub)
+
+On the [KPI Rover hub](https://github.com/Fastroof/kpi-rover-hub) the first
+card among the worlds is **Shared arena**: one Gazebo world on the server that
+robots from all sessions join. The card shows the world the arena runs and a
+ribbon: *JOIN*, or *OFFLINE* when the arena is not running (click to look again). It is
+there only when the hub's `kpi-arena` command is (the admin starts the arena
+with `./run.sh arena start <world>`).
+
+Clicking the card opens the run page of the arena. There **Join** takes the
+place of starting the simulation: the GUI downloads the map the arena made of
+its world when it started (nothing is built in your session). Then you put
+the robot in anywhere on the map as usual. Its navigation runs in your
+session. RViz, the Gazebo window and robot control talk to the arena.
+**Leave** takes your robot out of the arena.
+
+For now there is one robot at a time in the arena; if another one is there,
+the Robot card says so. Objects can't be put into the arena.
 
 ## Where the world information comes from
 
@@ -99,13 +121,13 @@ A new world or option shows up in the GUI without changing the GUI.
 | File | What |
 |---|---|
 | `kpi_rover_gui/main_window.py` | the window and the flow: worlds → settings → run; starting the simulation |
-| `kpi_rover_gui/home_page.py` | the world cards |
+| `kpi_rover_gui/home_page.py` | the world cards and the shared arena |
 | `kpi_rover_gui/world_page.py` | the settings page: picture, presets, settings |
 | `kpi_rover_gui/run_page.py` | the run page: process cards, their logs, the robot and objects panels |
 | `kpi_rover_gui/map_view.py` | the world map with the robot and the objects on it |
 | `kpi_rover_gui/controls.py` | option editors (switch, segments, slider, variant number), no-wheel filter |
 | `kpi_rover_gui/theme.py` | light/dark colors and the style sheet |
 | `kpi_rover_gui/widgets.py` | images, flow layout, log view |
-| `kpi_rover_gui/workspace.py` | workspace paths, packages, worlds, the shell commands |
+| `kpi_rover_gui/workspace.py` | workspace paths, packages, worlds, the shell commands (also of the arena) |
 | `kpi_rover_gui/runner.py` | a command in its own process group: output lines, graceful stop |
 | `kpi_rover_gui/storage.py` | your presets and the last used options (JSON) |
