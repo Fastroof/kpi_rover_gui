@@ -1,21 +1,21 @@
 # KPI Rover GUI
 
-A desktop application for everyday work with the kpi_rover simulation: pick a
+A desktop application for everyday work with the KPI Rover simulation: pick a
 world, set it up while looking at pictures of what each option does, and start
 or stop the simulation.
 
-It is an optional add-on. kpi_rover works fully without it, and the GUI runs
-the same commands you would type in a terminal. You can copy that command
+It is an optional add-on. The simulation works fully without it, and the GUI
+runs the same commands you would type in a terminal. You can copy that command
 from the log panel.
 
 ## Requirements
 
-- ROS 2 Jazzy and the [kpi_rover](https://github.com/KPI-Rover/ros_sw) workspace
-  on this machine (not in Docker), in a version that has the world manifests
-  (`worlds/<world>.world.yaml`) and their tools (`world_info.py`,
-  `render_previews.py`, `spawn_object.py`, the `gazebo` argument of `launch_sim.launch.py`).
-- Python 3 with PyQt5 and PyYAML. Both come with ROS (`python3-pyqt5`,
-  `python3-yaml`).
+- The [KPI Rover](https://github.com/KPI-Rover/ros_sw) workspace, built, in a version with
+  `kpi_rover_worlds` (worlds in `worlds/<world>/`, `python3 -m kpi_rover_worlds.world_info`) and
+  `kpi_rover_bringup` (`world.launch.py`, `sim_robot.launch.py`).
+- ROS 2 Jazzy where the GUI runs: in the `pc` container of the workspace or installed on the machine.
+- Python 3 with PyQt5 and PyYAML (`python3-pyqt5`, `python3-yaml`; the `pc` image has both).
+  Keyboard control needs a terminal window: `gnome-terminal` or `x-terminal-emulator` (e.g. `xterm`).
 
 ## Run
 
@@ -25,9 +25,9 @@ cd kpi_rover_gui
 ./kpi-rover-gui            # or: python3 -m kpi_rover_gui
 ```
 
-The defaults are the workspace `~/ros_ws` and the ROS setup script
-`/opt/ros/jazzy/setup.bash`. To change them, open **Preferences**. Light or dark
-follows the system setting, and the GUI follows it live when you switch it.
+The workspace is `$KPI_WS` (`/workspace` in the `pc` container) or `~/ros_sw`, and ROS is
+`/opt/ros/$ROS_DISTRO`; **Preferences** changes them. Light or dark follows the system setting,
+or `KPI_ROVER_GUI_THEME=light|dark`.
 
 ## How it works
 
@@ -48,7 +48,7 @@ follows the system setting, and the GUI follows it live when you switch it.
      floor with your marking.
 3. **Next** (F5) opens the run page with these settings. Nothing starts by
    itself; each card has its state, a button and its log:
-   - **Build**: colcon build of kpi_rover, of one package or of all. It says
+   - **Build**: colcon build of the workspace, of one package or of all. It says
      when a build is needed because the worlds changed.
    - **Simulation**: Gazebo with the world, without the robot. While it starts,
      the GUI makes the map of exactly this generated world (in a hidden Gazebo
@@ -59,7 +59,7 @@ follows the system setting, and the GUI follows it live when you switch it.
      robot would be put into something, its square turns red and it can't be
      put in. Otherwise it is put on the surface there. Then *Put the robot here* starts the
      robot with its controllers, localization, mapping and navigation
-     (`launch_sim.launch.py gazebo:=false`). *Take out* removes it, so you can put it
+     (`sim_robot.launch.py`). *Take out* removes it, so you can put it
      somewhere else.
    - **Objects**: choose a box, a crate, a cone, a low object or the flat
      board and click the map to put it into the running world (in the garden
@@ -102,19 +102,19 @@ the Robot card says so. Objects can't be put into the arena.
 
 ## Where the world information comes from
 
-Everything about the worlds comes from the kpi_rover world manifests
-(`worlds/<world>.world.yaml`, read with `world_info.py --json`):
+Everything about the worlds comes from the `kpi_rover_worlds` manifests
+(`worlds/<world>/<world>.yaml`, read with `python3 -m kpi_rover_worlds.world_info --json`):
 
 - the options and their types, ranges, groups and descriptions;
 - the *More settings* (`advanced: true`);
 - the world presets;
 - the start points;
 - the pictures in `worlds/<world>/previews/`, rendered with
-  `worlds/tools/render_previews.py <world>`. With `--sdf` the same tool makes the
-  map of a generated world, and `worlds/tools/spawn_object.py` puts objects into
-  the running world.
+  `ros2 run kpi_rover_worlds render_previews.py <world>`. With `--sdf` the same tool makes the
+  map of a generated world, and `spawn_object.py` puts objects into the running world.
 
-A new world or option shows up in the GUI without changing the GUI.
+The simulation is `world_info --build <world> <args>` and `world.launch.py` with the built
+world file. A new world or option shows up in the GUI without changing the GUI.
 
 ## Code
 

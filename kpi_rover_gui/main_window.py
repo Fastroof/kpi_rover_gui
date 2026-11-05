@@ -33,8 +33,8 @@ from .storage import LastUsed, Presets
 from .world_page import WorldPage
 
 DEFAULTS = {
-    'workspace': '~/ros_ws',
-    'ros_setup': '/opt/ros/jazzy/setup.bash',
+    'workspace': os.environ.get('KPI_WS', '~/ros_sw'),
+    'ros_setup': f"/opt/ros/{os.environ.get('ROS_DISTRO', 'jazzy')}/setup.bash",
 }
 # Lines of the logs: the generated world file, the world is up, the robot is ready, its controller failed.
 WORLD_FILE_LINE = re.compile(r'World file: (\S+)')
@@ -212,7 +212,7 @@ class MainWindow(QMainWindow):
         self.build_card = ProcessCard('Build', 'colcon build of the workspace.', self._build_command,
                                       lambda command: self.ws.shell(command, with_install=False), 'Build', 'Stop')
         self.build_card.idle_hook = self._build_status
-        self.package = package_box([], self.settings.value('package', ws_module.PACKAGE))
+        self.package = package_box([], self.settings.value('package', ws_module.WORLDS))
         self.package.currentIndexChanged.connect(lambda: self.settings.setValue('package', self.package.currentData()))
         self.build_card.runner.finished.connect(self._build_finished)
         self.run.add(self.build_card, self.package)
@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
 
         # RViz and the Gazebo window are separate: the Gazebo window costs much CPU on a shared server.
         self.rviz = ProcessCard('RViz', 'See the robot sensors, the map and the navigation.',
-                                lambda: ws_module.rviz_command(self.ws), shell, 'Open', 'Close')
+                                ws_module.rviz_command, shell, 'Open', 'Close')
         self.rviz_with_sim = option_check('Open with the simulation', self.settings.value('sim_rviz', False, type=bool))
         self.rviz_with_sim.toggled.connect(lambda on: self.settings.setValue('sim_rviz', on))
         self.run.add(self.rviz, self.rviz_with_sim)
@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
         message = '\n'.join(problems)
         if not problems:
             try:
-                worlds, _ = ws.load_worlds()
+                worlds = ws.load_worlds()
                 self.worlds = {w['name']: w for w in worlds}
             except (ws_module.WorkspaceError, OSError, ValueError) as e:
                 message = str(e)
@@ -307,7 +307,7 @@ class MainWindow(QMainWindow):
         self.home.set_worlds(list(self.worlds.values()), message)
         if ws_module.arena_available() and not problems:
             self.check_arena()
-        current = self.package.currentData() or self.settings.value('package', ws_module.PACKAGE)
+        current = self.package.currentData() or self.settings.value('package', ws_module.WORLDS)
         self.package.blockSignals(True)
         self.package.clear()
         self.package.addItem('All packages', None)
@@ -393,7 +393,7 @@ class MainWindow(QMainWindow):
     # --- from the settings to the run page ---
 
     def _settings_command(self):
-        return ws_module.sim_command(self.world, self.page.settings()['args'], ui=False, robot=False)
+        return ws_module.sim_command(self.world, self.page.settings()['args'])
 
     def next(self):
         """Take the settings of the open world to the run page; start nothing."""
@@ -513,7 +513,7 @@ class MainWindow(QMainWindow):
             box.setDefaultButton(build)
             box.exec_()
             if box.clickedButton() == build:
-                self.package.setCurrentIndex(max(0, self.package.findData(ws_module.PACKAGE)) if ws.is_built()
+                self.package.setCurrentIndex(max(0, self.package.findData(ws_module.WORLDS)) if ws.is_built()
                                              else 0)
                 self.start_after_build = True
                 self.run.select(self.build_card)

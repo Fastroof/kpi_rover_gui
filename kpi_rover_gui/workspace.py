@@ -3,8 +3,8 @@ The ROS workspace the GUI works with: its packages, its worlds and the shell
 commands to build it and to run the simulation.
 
 The GUI never imports kpi_rover code: it runs the same commands a user would
-type in a terminal. World descriptions come from 'world_info.py --json' of
-the kpi_rover package (see kpi_rover/worlds/lib/world_info.py).
+type in a terminal. World descriptions come from
+'python3 -m kpi_rover_worlds.world_info --json'.
 """
 
 import filecmp
@@ -16,11 +16,15 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 
-PACKAGE = 'kpi_rover'
+WORLDS = 'kpi_rover_worlds'
+BRINGUP = 'kpi_rover_bringup'
 
-# Files of the worlds folder whose difference between the sources and the
-# installed package means the installed worlds are outdated.
-WORLD_FILE_PATTERNS = ('*.world.yaml', '*.sdf.xacro', '*.sdf', '*.world', 'lib/*.py', 'tools/*.py', '*/generator.py')
+# Files of kpi_rover_worlds whose difference between the sources and the install means a build is needed:
+# (source folder, files in it, installed folder relative to the install prefix).
+WORLD_FILES = (('worlds', '*/*.*', f'share/{WORLDS}/worlds'),
+               ('common/config', '*.yaml', f'share/{WORLDS}/common/config'),
+               ('common/python', '*.py', f'lib/python3*/site-packages/{WORLDS}'),
+               ('tools', '*.py', f'lib/{WORLDS}'))
 
 
 class WorkspaceError(Exception):
@@ -36,33 +40,9 @@ class Workspace:
     def install_setup(self):
         return os.path.join(self.path, 'install', 'setup.bash')
 
-    @property
-    def src_worlds(self):
-        return os.path.join(self.path, 'src', PACKAGE, 'worlds')
-
-    @property
-    def installed_worlds(self):
-        return os.path.join(self.path, 'install', PACKAGE, 'share', PACKAGE, 'worlds')
-
-    def is_built(self):
-        return os.path.isfile(self.install_setup) and os.path.isdir(self.installed_worlds)
-
-    def problems(self):
-        """What prevents using the workspace at all, as a list of messages."""
-        problems = []
-        if not os.path.isfile(self.ros_setup):
-            problems.append(f'ROS setup script not found: {self.ros_setup}')
-        if not os.path.isdir(os.path.join(self.path, 'src')):
-            problems.append(f'Not a ROS workspace (no src folder): {self.path}')
-        elif not os.path.isdir(self.src_worlds):
-            problems.append(f'Package {PACKAGE} not found in {self.path}/src')
-        return problems
-
-    # --- packages ---
-
-    def packages(self):
-        """Names of the packages in the workspace sources (like 'colcon list -n')."""
-        names = []
+    def package_dirs(self):
+        """{name: source folder} of the packages in the workspace sources (like 'colcon list')."""
+        found = {}
         for root, dirs, files in os.walk(os.path.join(self.path, 'src')):
             if 'COLCON_IGNORE' in files:
                 dirs[:] = []
@@ -73,54 +53,63 @@ class Workspace:
                 except ET.ParseError:
                     name = None
                 if name:
-                    names.append(name.strip())
+                    found[name.strip()] = root
                 dirs[:] = []
             dirs[:] = [d for d in dirs if not d.startswith('.')]
-        return sorted(names)
+        return found
+
+    def packages(self):
+        return sorted(self.package_dirs())
+
+    def install_prefix(self, package):
+        """Install prefix of a package: install/<package> (colcon default) or install (--merge-install)."""
+        isolated = os.path.join(self.path, 'install', package)
+        return isolated if os.path.isdir(isolated) else os.path.join(self.path, 'install')
+
+    def is_built(self):
+        return (os.path.isfile(self.install_setup)
+                and os.path.isdir(os.path.join(self.install_prefix(WORLDS), 'share', WORLDS, 'worlds')))
+
+    def problems(self):
+        """What prevents using the workspace at all, as a list of messages."""
+        problems = []
+        if not os.path.isfile(self.ros_setup):
+            problems.append(f'ROS setup script not found: {self.ros_setup}')
+        if not os.path.isdir(os.path.join(self.path, 'src')):
+            problems.append(f'Not a ROS workspace (no src folder): {self.path}')
+        elif WORLDS not in self.package_dirs():
+            problems.append(f'Package {WORLDS} not found in {self.path}/src')
+        return problems
 
     # --- worlds ---
 
-    def load_worlds(self):
-        """
-        (worlds, from_install): descriptions of the worlds (see world_info.describe)
-        of the installed package, which the launch files use, or of the sources
-        if the workspace is not built yet.
-        """
-        from_install = os.path.isfile(os.path.join(self.installed_worlds, 'lib', 'world_info.py'))
-        folder = self.installed_worlds if from_install else self.src_worlds
-        script = os.path.join(folder, 'lib', 'world_info.py')
-        if not os.path.isfile(script):
-            raise WorkspaceError(f'{script} not found')
-        result = subprocess.run(['python3', script, '--json'], capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            raise WorkspaceError(f'world_info.py failed:\n{result.stderr.strip()}')
-        worlds = json.loads(result.stdout)
-        for world in worlds:
-            # Older world_info.py versions list start points as plain names.
-            world['start_points'] = [p if isinstance(p, dict) else dict(name=str(p), label=str(p))
-                                     for p in world.get('start_points') or []]
-        return worlds, from_install
+    def _run(self, command, timeout):
+        return subprocess.run(self.shell(command), capture_output=True, text=True, timeout=timeout)
 
-    def tool(self, name):
-        """Path of a tool script of the installed worlds folder (render_previews.py, spawn_object.py)."""
-        return os.path.join(self.installed_worlds, 'tools', name)
+    def load_worlds(self):
+        """Descriptions of the installed worlds, which the launch files use (see world_info.describe)."""
+        if not self.is_built():
+            raise WorkspaceError('The workspace is not built yet: run colcon build in it.')
+        result = self._run(f'python3 -m {WORLDS}.world_info --json', 60)
+        if result.returncode != 0:
+            raise WorkspaceError(f'world_info failed:\n{result.stderr.strip()}')
+        return json.loads(result.stdout)
 
     def map_command(self, world, sdf, out, partition):
         """The command making the map of a generated world file (render_previews.py --sdf)."""
-        return shlex.join(['python3', self.tool('render_previews.py'), world, '--sdf', sdf, '--out', out,
+        return shlex.join(['ros2', 'run', WORLDS, 'render_previews.py', world, '--sdf', sdf, '--out', out,
                            '--partition', partition])
 
     def spawn_object_command(self, world, name, kind, x, y, z, yaw, scale=1.0):
-        return shlex.join(['python3', self.tool('spawn_object.py'), '--world', world, '--name', name, '--type', kind,
+        return shlex.join(['ros2', 'run', WORLDS, 'spawn_object.py', '--world', world, '--name', name, '--type', kind,
                            '--x', f'{x:.3f}', '--y', f'{y:.3f}', '--z', f'{z:.3f}', '--yaw', f'{yaw:.3f}',
                            '--scale', f'{scale:g}'])
 
     def object_library(self):
-        """[{name, kind, size}] of the object library, or [] if the tool isn't installed."""
-        if not os.path.isfile(self.tool('spawn_object.py')):
+        """[{name, kind, size}] of the object library, or [] if it can't be read."""
+        if not self.is_built():
             return []
-        result = subprocess.run(['python3', self.tool('spawn_object.py'), '--list'], capture_output=True, text=True,
-                                timeout=30)
+        result = self._run(f'ros2 run {WORLDS} spawn_object.py --list', 30)
         try:
             return json.loads(result.stdout) if result.returncode == 0 else []
         except ValueError:
@@ -128,12 +117,17 @@ class Workspace:
 
     def worlds_outdated(self):
         """True if the world files in the sources differ from the installed ones (a build is needed)."""
-        if not os.path.isdir(self.installed_worlds):
+        src = self.package_dirs().get(WORLDS)
+        if not src or not self.is_built():
             return True
-        for pattern in WORLD_FILE_PATTERNS:
-            for src in glob.glob(os.path.join(self.src_worlds, pattern)):
-                installed = os.path.join(self.installed_worlds, os.path.relpath(src, self.src_worlds))
-                if not os.path.isfile(installed) or not filecmp.cmp(src, installed, shallow=False):
+        prefix = self.install_prefix(WORLDS)
+        for folder, files, installed in WORLD_FILES:
+            targets = glob.glob(os.path.join(prefix, installed))
+            if not targets:
+                return True
+            for path in glob.glob(os.path.join(src, folder, files)):
+                target = os.path.join(targets[0], os.path.relpath(path, os.path.join(src, folder)))
+                if not os.path.isfile(target) or not filecmp.cmp(path, target, shallow=False):
                     return True
         return False
 
@@ -160,35 +154,26 @@ def build_command(packages=None):
     return shlex.join(command)
 
 
-def sim_command(world, world_args=None, start=None, pose=None, ui=True, robot=True):
+def sim_command(world, world_args=None):
     """
-    The command starting the simulation (launch_sim.launch.py) with a world,
-    its arguments {name: string value}, and a start point or a pose (x, y, z, yaw).
-    Without 'ui' it starts no Gazebo GUI and RViz (the GUI runs them separately);
-    without 'robot' only the world (the robot is added with robot_command).
+    The command starting the world (world.launch.py, without its Gazebo window) built with
+    its arguments {name: string value}; it prints the generated world file first.
     """
-    command = ['ros2', 'launch', PACKAGE, 'launch_sim.launch.py', f'world:={world}']
-    if not robot:
-        command.append('robot:=false')
-    if not ui:
-        command.append('ui:=false')
-    if start:
-        command.append(f'start:={start}')
-    elif pose and any(pose):
-        command += [f'{k}:={v:g}' for k, v in zip(('x_pose', 'y_pose', 'z_pose', 'yaw_pose'), pose)]
-    if world_args:
-        command.append('world_args:=' + ' '.join(f'{k}:={v}' for k, v in world_args.items()))
-    return shlex.join(command)
+    build = shlex.join(['python3', '-m', f'{WORLDS}.world_info', '--build', world]
+                       + [f'{k}:={v}' for k, v in (world_args or {}).items()])
+    script = (f'world=$({build}) && echo "World file: $world" && '
+              f'exec ros2 launch {BRINGUP} world.launch.py gui:=false "world:=$world"')
+    return shlex.join(['bash', '-c', script])
 
 
 def robot_command(x, y, z, yaw):
-    """The command putting the robot with its navigation into the running world (launch_sim.launch.py gazebo:=false)."""
-    return shlex.join(['ros2', 'launch', PACKAGE, 'launch_sim.launch.py', 'gazebo:=false', 'ui:=false',
+    """The command putting the robot with its navigation into the running world (sim_robot.launch.py)."""
+    return shlex.join(['ros2', 'launch', BRINGUP, 'sim_robot.launch.py',
                        f'x_pose:={x:.3f}', f'y_pose:={y:.3f}', f'z_pose:={z:.3f}', f'yaw_pose:={yaw:.4f}'])
 
 
-# Model name of the robot in Gazebo (spawn_robot.launch.py).
-ROBOT_MODEL = 'my_bot'
+# Model name of the robot in Gazebo (sim_robot.launch.py).
+ROBOT_MODEL = 'kpi_rover'
 
 
 def remove_model_command(world, name):
@@ -198,19 +183,17 @@ def remove_model_command(world, name):
 
 
 def gazebo_window_command():
-    """The command starting the Gazebo GUI for a running simulation (as launch_sim_ui.launch.py does)."""
+    """The command starting the Gazebo GUI for a running simulation."""
     return shlex.join(['ros2', 'launch', 'ros_gz_sim', 'gz_sim.launch.py', 'gz_args:=-g -v4'])
 
 
-def rviz_command(ws):
-    """The command starting RViz with the kpi_rover config and simulated time (as launch_sim_ui.launch.py does)."""
-    config = os.path.join(ws.path, 'install', PACKAGE, 'share', PACKAGE, 'config', 'view_bot.rviz')
-    return shlex.join(['ros2', 'run', 'rviz2', 'rviz2', '-d', config, '--ros-args', '-p', 'use_sim_time:=true'])
+def rviz_command():
+    return shlex.join(['ros2', 'launch', BRINGUP, 'rviz.launch.py', 'use_sim_time:=true'])
 
 
 def joystick_command():
     """Drive the robot with a gamepad (joystick.launch.py)."""
-    return shlex.join(['ros2', 'launch', PACKAGE, 'joystick.launch.py'])
+    return shlex.join(['ros2', 'launch', BRINGUP, 'joystick.launch.py', 'use_sim_time:=true'])
 
 
 # The keyboard teleop reads keys from a terminal, so it runs in a terminal window of its own.
@@ -280,4 +263,3 @@ def running_gazebo():
         if pid.isdigit() and program in ('gz', 'ruby'):
             processes.append((int(pid), cmd))
     return processes
-
